@@ -1,0 +1,151 @@
+var roi = [
+          [81.52660314820993, 29.59618894646125],
+          [81.52660314820993, 28.259676179409556],
+          [83.08666174195993, 28.259676179409556],
+          [83.08666174195993, 29.59618894646125]
+];
+
+var regionOfInterest = ee.Geometry.Polygon(roi);
+
+// 2. Center the Map on the ROI
+Map.centerObject(regionOfInterest);
+Map.addLayer(regionOfInterest, {color: 'black'}, 'Study Area');
+
+// 3. Load MODIS Land Cover Data
+var modisLandCover = ee.ImageCollection("MODIS/061/MCD12Q1")
+  .mode()
+  .select('LC_Type1');
+  
+/*
+.mode():
+This function computes the most frequently occurring value (mode) for each pixel across all images in the collection.
+It is used to reduce data variability and highlight the most consistent land cover classification over time.
+*/
+
+// 4. Visualize Land Cover Data
+var landCoverVisualization = {
+  min: 1.0,
+  max: 17.0,
+  palette: [
+    '05450a', '086a10', '54a708', '78d203', '009900', 'c6b044', 'dcd159',
+    'dade48', 'fbff13', 'b6ff05', '27ff87', 'c24f44', 'a5a5a5', 'ff6d4c',
+    '69fff8', 'f9ffa4', '1c0dff'
+  ],
+};
+
+Map.addLayer(modisLandCover.clip(regionOfInterest), landCoverVisualization, 'Land Cover');
+
+// 5. Extract Water Bodies (Class 17)
+var waterMask = modisLandCover.eq(17).updateMask(modisLandCover.eq(17));
+var waterVector = waterMask.reduceToVectors({
+  geometry: regionOfInterest,
+  scale: 500
+}).union(1);
+
+/*
+.union(1)
+Merges adjacent water polygons into a single feature.
+Avoids fragmented polygons, giving a cleaner water body outline.
+
+*/
+Map.addLayer(waterVector, {color: 'blue'}, 'Water Bodies');
+
+// 6. Load and Process MODIS LST Data (Day and Night, 2004–2024)
+var lstDay = ee.ImageCollection("MODIS/061/MOD11A2")
+  .select('LST_Day_1km')
+  .filterDate('2004-01-01', '2024-12-31')
+  .map(function(image) {
+    return image.multiply(0.02).subtract(273.15)
+      .copyProperties(image, image.propertyNames());
+  });
+
+var lstNight = ee.ImageCollection("MODIS/061/MOD11A2")
+  .select('LST_Night_1km')
+  .filterDate('2004-01-01', '2024-12-31')
+  .map(function(image) {
+    return image.multiply(0.02).subtract(273.15)
+      .copyProperties(image, image.propertyNames());
+  });
+
+// 7. Time-Series Analysis for Water Bodies (Day and Night)
+print(
+  ui.Chart.image.series({
+    imageCollection: lstDay,
+    region: waterVector,
+    reducer: ee.Reducer.mean(),
+    scale: 500,
+    xProperty: 'system:time_start'
+  }).setOptions({
+    title: 'Daytime LST over Water Bodies (2004–2024)',
+    hAxis: {title: 'Year'},
+    vAxis: {title: 'Temperature (°C)'},
+    lineWidth: 2,
+    colors: ['#d6662c']
+  })
+);
+
+print(
+  ui.Chart.image.series({
+    imageCollection: lstNight,
+    region: waterVector,
+    reducer: ee.Reducer.mean(),
+    scale: 500,
+    xProperty: 'system:time_start'
+  }).setOptions({
+    title: 'Nighttime LST over Water Bodies (2004–2024)',
+    hAxis: {title: 'Year'},
+    vAxis: {title: 'Temperature (°C)'},
+    lineWidth: 2,
+    colors: ['#191970']
+  })
+);
+
+// 8. Extract Forested Area (Classes 1 to 5)
+function extractForestAreas(image) {
+  var forestMask = image.eq(1).or(image.eq(2))
+    .or(image.eq(3)).or(image.eq(4)).or(image.eq(5)) // Include all forest classes
+    .updateMask(image.eq(1).or(image.eq(2)).or(image.eq(3)).or(image.eq(4)).or(image.eq(5))); // Mask for forest classes
+  return forestMask.reduceToVectors({
+    geometry: regionOfInterest,
+    scale: 500
+  }).union(1);
+}
+
+// Call the function to extract forested areas
+var forestAreas = extractForestAreas(modisLandCover);
+
+// Add the extracted forest layer to the map
+Map.addLayer(forestAreas, {color: 'green'}, 'Forested Areas');
+
+// 9. Time-Series Analysis for Forested Areas (Day and Night)
+print(
+  ui.Chart.image.series({
+    imageCollection: lstDay,
+    region: forestAreas,
+    reducer: ee.Reducer.mean(),
+    scale: 500,
+    xProperty: 'system:time_start'
+  }).setOptions({
+    title: 'Daytime LST over Forested Areas (2004–2024)',
+    hAxis: {title: 'Year'},
+    vAxis: {title: 'Temperature (°C)'},
+    lineWidth: 2,
+    colors: ['#228B22'] // Green for daytime LST
+  })
+);
+
+print(
+  ui.Chart.image.series({
+    imageCollection: lstNight,
+    region: forestAreas,
+    reducer: ee.Reducer.mean(),
+    scale: 500,
+    xProperty: 'system:time_start'
+  }).setOptions({
+    title: 'Nighttime LST over Forested Areas (2004–2024)',
+    hAxis: {title: 'Year'},
+    vAxis: {title: 'Temperature (°C)'},
+    lineWidth: 2,
+    colors: ['#006400'] // Dark green for nighttime LST
+  })
+);
